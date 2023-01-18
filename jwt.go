@@ -1,4 +1,4 @@
-package jwt_middleware_optional_nofork
+package traefik_jwt_optional_nofork
 
 import (
 	"context"
