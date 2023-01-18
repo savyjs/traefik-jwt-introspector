@@ -93,7 +93,14 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		// TODO Check for outside of ASCII range characters
+		// Check if token has expired 
+		if exp := token.payload["exp"]; exp != nil {
+			if expInt, err := strconv.ParseInt(fmt.Sprint(exp), 10, 64); err != nil || expInt < time.Now().Unix() {
+				http.Error(res, "Token has expired", http.StatusUnauthorized)
+				return
+			}
+		}
+
 		
 		// Inject header as proxypayload or configured name
 		req.Header.Add(j.proxyHeaderName, payload)
