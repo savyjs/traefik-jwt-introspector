@@ -48,9 +48,6 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	if len(config.HeaderPrefix) == 0 {
 		config.HeaderPrefix = "Bearer"
 	}
-	if len(config.Optional) == 0 {
-		config.Optional = false
-	}
 
 	return &JWT{
 		next:		next,
