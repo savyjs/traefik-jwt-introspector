@@ -1,0 +1,8 @@
+displayName: JWT Middleware Optional
+type: middleware
+import: sorasful/traefik-jwt-optional-nofork
+summary: 'Verify JWT Token in auth header and injects decoded payload in header and add optional JWT3'
+
+testData:
+  encodedHeader:
+    - "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ._XEngvIuxOcA-j7y_upRUbXli4DLToNf7HxH1XNmxSc"
