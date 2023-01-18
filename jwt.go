@@ -1,4 +1,4 @@
-package jwt_middleware
+package jwt_middleware_optional_nofork
 
 import (
 	"context"
