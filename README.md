@@ -12,8 +12,8 @@ Meaning that if you want to check that a request is authenticated you'll need to
 Start with command
 ```yaml
 command:
-  - "--experimental.plugins.jwt_middleware_optional_nofork.modulename=github.com/sorasful/traefik-jwt-optional-nofork"
-  - "--experimental.plugins.jwt_middleware_optional_nofork.version=v0.0.2"
+  - "--experimental.plugins.traefik-jwt-optional-nofork.modulename=github.com/sorasful/traefik-jwt-optional-nofork"
+  - "--experimental.plugins.traefik-jwt-optional-nofork.version=v0.0.2"
 ```
 
 Activate plugin in your config  
@@ -23,7 +23,7 @@ http:
   middlewares:
     my-jwt-middleware:
       plugin:
-        jwt_middleware_optional_nofork:
+        traefik-jwt-optional-nofork:
           secret: SECRET
           proxyHeaderName: injectedPayload
           authHeader: Authorization
