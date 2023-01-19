@@ -74,6 +74,7 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	if j.optional == true && len(headerToken) == 0{
 		fmt.Println(req.Header)
 		j.next.ServeHTTP(res, req)
+		return 
 	}
 
 	if len(headerToken) == 0 {
