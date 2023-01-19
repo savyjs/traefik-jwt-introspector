@@ -73,8 +73,8 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
 	// Delete the header we inject if they already are in the request 
 	// to avoid people trying to inject stuff
-	
-	req.Header.Delete(j.proxyHeaderName)
+
+	req.Header.Del(j.proxyHeaderName)
 
 	if j.optional == true && len(headerToken) == 0{
 		fmt.Println(req.Header)
