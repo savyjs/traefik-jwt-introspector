@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"strings"
 	"net/http"
-
+	"strconv"
 	"encoding/base64"
 	"crypto/hmac"
 	"crypto/sha256"
+	"time"
+	"encoding/json"
 )
 
 type Config struct {
@@ -18,6 +20,12 @@ type Config struct {
 	HeaderPrefix string `json:"headerPrefix,omitempty"`
 	Optional bool `json:"optional,omitempty"`
 }
+
+type Data struct {
+	Uid string `json:"uid"`
+	Exp int    `json:"exp"`
+}
+
 
 
 func CreateConfig() *Config {
@@ -93,12 +101,14 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		// Check if token has expired 
-		if exp := token.payload["exp"]; exp != nil {
-			if expInt, err := strconv.ParseInt(fmt.Sprint(exp), 10, 64); err != nil || expInt < time.Now().Unix() {
-				http.Error(res, "Token has expired", http.StatusUnauthorized)
-				return
-			}
+		var data Data
+		json.Unmarshal([]byte(payload), &data)
+		exp := data.Exp
+		now := time.Now().Unix() // current timestamp in seconds
+
+		if now > int64(exp) {
+			http.Error(res, "Token has expired", http.StatusUnauthorized)
+			return
 		}
 
 		
