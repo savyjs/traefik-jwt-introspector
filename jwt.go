@@ -77,19 +77,28 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	}
 
 	if len(headerToken) == 0 {
-		http.Error(res, "Request error", http.StatusUnauthorized)
+		res.Header().Set("Content-Type", "application/json")
+		res.WriteHeader(http.StatusUnauthorized)
+		errorMessage := map[string]string{"detail": "Missing Token"}
+		json.NewEncoder(res).Encode(errorMessage)
 		return
 	}
 	
 	token, preprocessError  := preprocessJWT(headerToken, j.headerPrefix)
 	if preprocessError != nil {
-		http.Error(res, "Request error", http.StatusBadRequest)
+		res.Header().Set("Content-Type", "application/json")
+		res.WriteHeader(http.StatusForbidden)
+		errorMessage := map[string]string{"detail": "Invalid Token"}
+		json.NewEncoder(res).Encode(errorMessage)
 		return
 	}
 	
 	verified, verificationError := verifyJWT(token, j.secret)
 	if verificationError != nil {
-		http.Error(res, "Not allowed", http.StatusUnauthorized)
+		res.Header().Set("Content-Type", "application/json")
+		res.WriteHeader(http.StatusForbidden)
+		errorMessage := map[string]string{"detail": "Invalid Token"}
+		json.NewEncoder(res).Encode(errorMessage)
 		return
 	}
 
@@ -97,7 +106,10 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		// If true decode payload
 		payload, decodeErr := decodeBase64(token.payload)
 		if decodeErr != nil {
-			http.Error(res, "Request error", http.StatusBadRequest)
+			res.Header().Set("Content-Type", "application/json")
+			res.WriteHeader(http.StatusBadRequest)
+			errorMessage := map[string]string{"detail": "Request error"}
+			json.NewEncoder(res).Encode(errorMessage)
 			return
 		}
 
@@ -107,7 +119,10 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		now := time.Now().Unix() // current timestamp in seconds
 
 		if now > int64(exp) {
-			http.Error(res, "Token has expired", http.StatusUnauthorized)
+			res.Header().Set("Content-Type", "application/json")
+			res.WriteHeader(http.StatusUnauthorized)
+			errorMessage := map[string]string{"detail": "Token has expired"}
+			json.NewEncoder(res).Encode(errorMessage)
 			return
 		}
 
@@ -117,7 +132,11 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		fmt.Println(req.Header)
 		j.next.ServeHTTP(res, req)
 	} else {
-		http.Error(res, "Not allowed", http.StatusUnauthorized)
+		res.Header().Set("Content-Type", "application/json")
+		res.WriteHeader(http.StatusUnauthorized)
+		errorMessage := map[string]string{"detail": "Not allowed"}
+		json.NewEncoder(res).Encode(errorMessage)
+		return
 	}
 }
 
