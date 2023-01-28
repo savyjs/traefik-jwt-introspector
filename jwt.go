@@ -1,4 +1,4 @@
-package traefik_jwt_optional_nofork
+package traefik_jwt_optional_api_validator
 
 import (
 	"context"
