@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"time"
 	"encoding/json"
+	"io/ioutil"
 )
 
 type Config struct {
