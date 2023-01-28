@@ -73,11 +73,9 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
        return
     }
 
-
-
 	// Check token via API call
 	apiUrl := j.validateAPIUrl
-	req, err := http.NewRequest("GET", apiUrl, nil)
+	newReq, err := http.NewRequest("GET", apiUrl, nil)
 	if err != nil {
 		res.Header().Set("Content-Type", "application/json")
 		res.WriteHeader(http.StatusInternalServerError)
@@ -85,9 +83,9 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		json.NewEncoder(res).Encode(errorMessage)
 		return
 	}
-	req.Header.Add("Authorization", headerToken)
+	newReq.Header.Add("Authorization", headerToken)
 	client := &http.Client{}
-	apiRes, err := client.Do(req)
+	apiRes, err := client.Do(newReq)
 	if err != nil {
 		res.Header().Set("Content-Type", "application/json")
 		res.WriteHeader(http.StatusInternalServerError)
