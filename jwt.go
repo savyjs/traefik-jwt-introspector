@@ -100,7 +100,7 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	if apiRes.StatusCode != http.StatusOK {
 		res.Header().Set("Content-Type", "application/json")
 		res.WriteHeader(apiRes.StatusCode)
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := ioutil.ReadAll(apiRes.Body)
         if err != nil {
             errorMessageTxt := "Invalid Token"
         }
