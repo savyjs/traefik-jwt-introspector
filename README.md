@@ -1,19 +1,28 @@
-# JWT Middleware
+# JWT Middleware API Validator
 
-JWT Middleware is a middleware plugin for [Traefik](https://github.com/containous/traefik) which verifies a jwt token and adds the payload as injected header to the request
-This version of the fork allows one to specify that the authorization code is optional. 
+JWT Middleware API Validator is a middleware plugin for [Traefik](https://github.com/containous/traefik) which verifies a jwt token and adds the payload as injected header to the request
+
 
 Meaning that if the authorization code is in the request, it will get checked, and if it does, the request will go through.
+The way the request is checked is by sending a GET request to a specific endpoint that you can override with `ValidateAPIUrl`. 
+If it returns a 200 response, it will go through.
 
-Meaning that if you want to check that a request is authenticated you'll need to verify that there is a `Authorization` header in your request.
+If you want to check that a request is authenticated you'll need to verify that there is a `Authorization` header in your request.
+You can also check the header that is injected `ProxyHeaderName`  which is `injectedPayload` by default.
+
+We delete it from the incoming requests, just in case.
+
+This plugin is heavily inspired by : https://github.com/23deg/jwt-middleware 
+
+
 
 ## Configuration
 
 Start with command
 ```yaml
 command:
-  - "--experimental.plugins.traefik-jwt-optional-nofork.modulename=github.com/sorasful/traefik-jwt-optional-nofork"
-  - "--experimental.plugins.traefik-jwt-optional-nofork.version=v0.0.2"
+  - "--experimental.plugins.traefik-jwt-optional-api-validator.modulename=github.com/sorasful/traefik-jwt-optional-api-validator"
+  - "--experimental.plugins.traefik-jwt-optional-api-validator.version=v0.0.14"
 ```
 
 Activate plugin in your config  
@@ -23,12 +32,12 @@ http:
   middlewares:
     my-jwt-middleware:
       plugin:
-        traefik-jwt-optional-nofork:
-          secret: SECRET
+        traefik-jwt-optional-api-validator:
           proxyHeaderName: injectedPayload
           authHeader: Authorization
           headerPrefix: Bearer
           optional: true
+          ValidateAPIUrl: http://yourAPI/validate-token
 ```
 
 Use as docker-compose label  

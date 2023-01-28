@@ -1,6 +1,6 @@
 displayName: JWT Middleware Optional
 type: middleware
-import: github.com/sorasful/traefik-jwt-optional-nofork
+import: github.com/sorasful/traefik-jwt-optional-api-validator
 summary: 'Verify JWT Token in auth header and injects decoded payload in header and add optional JWT3'
 
 testData:
