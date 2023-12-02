@@ -20,8 +20,8 @@ type Config struct {
 	HeaderPrefix string `json:"headerPrefix,omitempty"`
 	Optional bool `json:"optional,omitempty"`
 	ValidateAPIUrl string `json:"validateAPIUrl,omitempty"`
-	ClientID string `json:"ClientID,omitempty"`
-	ClientSecret string `json:"ClientSecret,omitempty"`
+	ClientID string `json:"clientID,omitempty"`
+	ClientSecret string `json:"clientSecret,omitempty"`
 }
 
 func CreateConfig() *Config {
