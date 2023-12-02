@@ -1,3 +1,3 @@
-module github.com/savyjs/traefik-jwt-optional-api-validator
+module github.com/savyjs/traefik-jwt-introspector
 
 go 1.14
