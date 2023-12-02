@@ -37,7 +37,9 @@ http:
           authHeader: Authorization
           headerPrefix: Bearer
           optional: true
-          ValidateAPIUrl: http://yourKeycloakDomainAPI/realms/realm-name/protocol/openid-connect/token/introspect
+          clientID: 
+          clientSecret:
+          validateAPIUrl: http://yourKeycloakDomainAPI/realms/realm-name/protocol/openid-connect/token/introspect
 ```
 
 Use as docker-compose label  
