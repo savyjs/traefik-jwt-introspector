@@ -20,6 +20,8 @@ type Config struct {
 	HeaderPrefix string `json:"headerPrefix,omitempty"`
 	Optional bool `json:"optional,omitempty"`
 	ValidateAPIUrl string `json:"validateAPIUrl,omitempty"`
+	ClientID string `json:"ClientID,omitempty"`
+	ClientSecret string `json:"ClientSecret,omitempty"`
 }
 
 func CreateConfig() *Config {
@@ -35,6 +37,12 @@ type JWT struct {
 	optional		bool
 	validateAPIUrl	string
 }
+
+type ApiResponse struct {
+	Active bool `json:"active"`
+	// Add other fields if necessary
+}
+
 
 func New(ctx context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
 
@@ -58,6 +66,8 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		authHeader: config.AuthHeader,
 		headerPrefix: config.HeaderPrefix,
 		optional: config.Optional,
+		clientID: config.ClientID,
+		clientSecret: config.ClientSecret,
 		validateAPIUrl: config.ValidateAPIUrl,
 	}, nil
 }
@@ -76,7 +86,10 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
 	// Check token via API call
 	apiUrl := j.validateAPIUrl
-	newReq, err := http.NewRequest("GET", apiUrl, nil)
+
+	payload := strings.NewReader("client_secret=" + j.clientID + "&client_id=" + j.ClientSecret  + "&token=" + headerToken)
+	
+	newReq, err := http.NewRequest("POST", apiUrl, nil)
 	if err != nil {
 		res.Header().Set("Content-Type", "application/json")
 		res.WriteHeader(http.StatusInternalServerError)
@@ -84,7 +97,8 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		json.NewEncoder(res).Encode(errorMessage)
 		return
 	}
-	newReq.Header.Add("Authorization", headerToken)
+	
+	// newReq.Header.Add("Authorization", headerToken)
 	client := &http.Client{}
 	apiRes, err := client.Do(newReq)
 	if err != nil {
@@ -101,15 +115,40 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		res.Header().Set("Content-Type", "application/json")
 		res.WriteHeader(apiRes.StatusCode)
 		body, err := ioutil.ReadAll(apiRes.Body)
-        if err != nil {
-            errorMessageTxt := "Invalid Token"
-        }
+	        if err != nil {
+	            errorMessageTxt := "Invalid Token"
+	        }
+				
 		errorMessageTxt := string(body)
 		errorMessage := map[string]string{"detail": errorMessageTxt}
 		json.NewEncoder(res).Encode(errorMessage)
 		return
 	}
 
+	body, err := ioutil.ReadAll(apiRes.Body)
+	if err != nil {
+		fmt.Println("Error reading response body:", err)
+		return
+	}
+
+	var response ApiResponse
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		fmt.Println("Error unmarshalling JSON:", err)
+		return
+	}
+
+	// Check if the response has { "active": true }
+	if response.Active {
+		j.next.ServeHTTP(res, req)
+		return
+	} else {
+		errorMessageTxt := "The Token is not active."
+	}
+
+	
+
+	
 	// If we reach this point, the token is valid, so we can continue with the request
 	j.next.ServeHTTP(res, req)
 	return
