@@ -1,4 +1,4 @@
-package traefik_jwt_optional_api_validator
+package traefik_jwt_introspector
 
 import (
 	"context"
