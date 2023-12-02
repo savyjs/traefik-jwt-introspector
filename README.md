@@ -21,7 +21,7 @@ This plugin is heavily inspired by : https://github.com/23deg/jwt-middleware
 Start with command
 ```yaml
 command:
-  - "--experimental.plugins.traefik-jwt-optional-api-validator.modulename=github.com/sorasful/traefik-jwt-optional-api-validator"
+  - "--experimental.plugins.traefik-jwt-optional-api-validator.modulename=github.com/savyjs/traefik-jwt-optional-api-validator"
   - "--experimental.plugins.traefik-jwt-optional-api-validator.version=v0.0.14"
 ```
 
