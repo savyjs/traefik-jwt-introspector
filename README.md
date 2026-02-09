@@ -38,15 +38,15 @@ http:
           headerPrefix: Bearer
           optional: true
           logLevel: debug
-          baseAuthUrl: https://auth.example.com
+          baseAuthUrl: https://auth.my-domain.com
           hostRealmMap:
-            oobo.example.com: back-office
-            api.example.com: example.com
+            domain-1.com: realm-1
+            domain-2.com: realm-2
           realms:
-            - realmName: back-office
+            - realmName: realm-1
               clientId: gateway
               clientSecret: your-secret
-            - realmName: example.com
+            - realmName: realm-2
               clientId: gateway
               clientSecret: your-secret
 ```
