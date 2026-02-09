@@ -5,10 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"strings"
-
-	"github.com/traefik/traefik/v2/pkg/log"
 )
 
 type Config struct {
@@ -112,8 +111,6 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 
 func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
-	logger := log.FromContext(req.Context())
-
 	headerValue := req.Header.Get(j.authHeader)
 	headerToken := strings.TrimPrefix(headerValue, j.headerPrefix+" ")
 
@@ -143,7 +140,7 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	}
 	realm := j.realms[realmName]
 
-	logger.Debug("Introspecting token", "host", host, "realm", realmName)
+	log.Printf("DEBUG jwt-introspector introspecting host=%s realm=%s", host, realmName)
 
 	clientID := realm.ClientID
 	clientSecret := realm.ClientSecret
@@ -178,7 +175,7 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
 	defer apiRes.Body.Close()
 
-	logger.Debug("Introspection response", "host", host, "realm", realmName, "status", apiRes.StatusCode)
+	log.Printf("DEBUG jwt-introspector introspection response host=%s realm=%s status=%d", host, realmName, apiRes.StatusCode)
 
 	// Check API response status code
 	if apiRes.StatusCode != http.StatusOK {
