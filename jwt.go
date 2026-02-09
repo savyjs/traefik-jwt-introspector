@@ -18,6 +18,7 @@ type Config struct {
 	BaseAuthURL     string            `json:"baseAuthUrl,omitempty"`
 	Realms          []RealmConfig     `json:"realms,omitempty"`
 	HostRealmMap    map[string]string `json:"hostRealmMap,omitempty"`
+	LogLevel        string            `json:"logLevel,omitempty"`
 }
 
 func CreateConfig() *Config {
@@ -40,6 +41,7 @@ type JWT struct {
 	optional        bool
 	realms          map[string]RealmConfig
 	hostRealmMap    map[string]string
+	logLevel        string
 }
 
 type ApiResponse struct {
@@ -57,6 +59,13 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	}
 	if len(config.HeaderPrefix) == 0 {
 		config.HeaderPrefix = "Bearer"
+	}
+	logLevel := strings.ToLower(strings.TrimSpace(config.LogLevel))
+	if len(logLevel) == 0 {
+		logLevel = "none"
+	}
+	if !isValidLogLevel(logLevel) {
+		return nil, fmt.Errorf("invalid logLevel %q", config.LogLevel)
 	}
 	if len(config.Realms) == 0 {
 		return nil, fmt.Errorf("realms cannot be empty")
@@ -106,6 +115,7 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		optional:        config.Optional,
 		realms:          realms,
 		hostRealmMap:    hostRealmMap,
+		logLevel:        logLevel,
 	}, nil
 }
 
@@ -134,13 +144,14 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	host = strings.Split(host, ":")[0]
 	realmName, ok := j.hostRealmMap[host]
 	if !ok {
+		j.logError("jwt-introspector realm not configured host=%s", host)
 		errorMessageTxt := "realm not configured for host"
 		http.Error(res, errorMessageTxt, http.StatusUnauthorized)
 		return
 	}
 	realm := j.realms[realmName]
 
-	log.Printf("DEBUG jwt-introspector introspecting host=%s realm=%s", host, realmName)
+	j.logDebug("jwt-introspector introspecting host=%s realm=%s", host, realmName)
 
 	clientID := realm.ClientID
 	clientSecret := realm.ClientSecret
@@ -167,6 +178,7 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	apiRes, err := client.Do(newReq)
 
 	if err != nil {
+		j.logError("jwt-introspector introspection request error host=%s realm=%s", host, realmName)
 		res.Header().Set("Content-Type", "application/json")
 		errorMessageTxt := "internal error"
 		http.Error(res, errorMessageTxt, http.StatusInternalServerError)
@@ -175,10 +187,11 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
 	defer apiRes.Body.Close()
 
-	log.Printf("DEBUG jwt-introspector introspection response host=%s realm=%s status=%d", host, realmName, apiRes.StatusCode)
+	j.logDebug("jwt-introspector introspection response host=%s realm=%s status=%d", host, realmName, apiRes.StatusCode)
 
 	// Check API response status code
 	if apiRes.StatusCode != http.StatusOK {
+		j.logError("jwt-introspector introspection non-200 host=%s realm=%s status=%d", host, realmName, apiRes.StatusCode)
 		res.Header().Set("Content-Type", "application/json")
 		res.WriteHeader(apiRes.StatusCode)
 		body, err := ioutil.ReadAll(apiRes.Body)
@@ -195,6 +208,7 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
 	body, err := ioutil.ReadAll(apiRes.Body)
 	if err != nil {
+		j.logError("jwt-introspector read response error host=%s realm=%s", host, realmName)
 		errorMessageTxt := "error reading response body"
 		http.Error(res, errorMessageTxt, http.StatusInternalServerError)
 		return
@@ -203,6 +217,7 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	var response ApiResponse
 	err = json.Unmarshal(body, &response)
 	if err != nil {
+		j.logError("jwt-introspector unmarshal error host=%s realm=%s", host, realmName)
 		errorMessageTxt := "error unmarshalling JSON"
 		http.Error(res, errorMessageTxt, http.StatusInternalServerError)
 		return
@@ -210,13 +225,68 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
 	// Check if the response has { "active": true }
 	if response.Active {
+		j.logInfo("jwt-introspector token active host=%s realm=%s", host, realmName)
 		req.Header.Set(j.proxyHeaderName, string(body))
 		j.next.ServeHTTP(res, req)
 		return
 	} else {
+		j.logInfo("jwt-introspector token inactive host=%s realm=%s", host, realmName)
 		errorMessageTxt := "invalid token"
 		http.Error(res, errorMessageTxt, http.StatusUnauthorized)
 		return
 	}
 
+}
+
+func isValidLogLevel(level string) bool {
+	switch level {
+	case "debug", "info", "error", "none", "all":
+		return true
+	default:
+		return false
+	}
+}
+
+func (j *JWT) logDebug(format string, args ...interface{}) {
+	if !j.shouldLog("debug") {
+		return
+	}
+	log.Printf("DEBUG %s", fmt.Sprintf(format, args...))
+}
+
+func (j *JWT) logInfo(format string, args ...interface{}) {
+	if !j.shouldLog("info") {
+		return
+	}
+	log.Printf("INFO %s", fmt.Sprintf(format, args...))
+}
+
+func (j *JWT) logError(format string, args ...interface{}) {
+	if !j.shouldLog("error") {
+		return
+	}
+	log.Printf("ERROR %s", fmt.Sprintf(format, args...))
+}
+
+func (j *JWT) shouldLog(level string) bool {
+	current := logLevelPriority(j.logLevel)
+	required := logLevelPriority(level)
+	return current >= required
+}
+
+func logLevelPriority(level string) int {
+	switch level {
+	case "none":
+		return 0
+	case "error":
+		return 1
+	case "info":
+		return 2
+	case "debug":
+		return 3
+	case "all":
+		return 4
+	default:
+		return 0
+	}
 }
