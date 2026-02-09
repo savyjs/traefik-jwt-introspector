@@ -38,15 +38,15 @@ http:
           headerPrefix: Bearer
           optional: true
           logLevel: debug
-          baseAuthUrl: https://auth.dev.thewebstage.com
+          baseAuthUrl: https://auth.my-domain.com
           hostRealmMap:
-            oobo.416-flowers.com: back-office
-            api.416-flowers.com: 416-flowers.com
+            domain-1.com: realm-1
+            domain-2.com: realm-2
           realms:
-            - realmName: back-office
+            - realmName: realm-1
               clientId: gateway
               clientSecret: your-secret
-            - realmName: 416-flowers.com
+            - realmName: realm-2
               clientId: gateway
               clientSecret: your-secret
 ```

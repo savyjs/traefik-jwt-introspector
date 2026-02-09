@@ -4,5 +4,14 @@ import: github.com/savyjs/traefik-jwt-introspector
 summary: 'Verify JWT token in auth header, optional mode, inject payload, and support host-based realm mapping'
 
 testData:
-  encodedHeader:
-    - "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ._XEngvIuxOcA-j7y_upRUbXli4DLToNf7HxH1XNmxSc"
+  optional: true
+  logLevel: none
+  hostRealmMap:
+    example.com: example
+    localhost: example
+    127.0.0.1: example
+  realms:
+    - realmName: example
+      clientId: client-id
+      clientSecret: client-secret
+      validateAPIUrl: http://example.com/realms/example/protocol/openid-connect/token/introspect
