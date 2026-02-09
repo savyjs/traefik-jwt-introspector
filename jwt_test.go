@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	testOriginHost       = "origin.test"
-	testOriginURL        = "https://origin.test"
-	testUnknownOriginURL = "https://unknown.test"
+	dummyOriginHost       = "dummy-origin.test"
+	dummyOriginURL        = "https://dummy-origin.test"
+	dummyUnknownOriginURL = "https://unknown-origin.test"
+	dummyOriginHeader     = "X-Dummy-Origin"
 )
 
 func TestOptionalAllowsMissingToken(t *testing.T) {
@@ -31,7 +32,7 @@ func TestOptionalAllowsMissingToken(t *testing.T) {
 				RealmName:      "realm-1",
 				ClientID:       "client-1",
 				ClientSecret:   "secret-1",
-				ValidateAPIUrl: "http://example.com/introspect",
+				ValidateAPIUrl: "http://introspect.invalid",
 			},
 		},
 	}
@@ -41,7 +42,7 @@ func TestOptionalAllowsMissingToken(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/resource", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://service.test/resource", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -69,7 +70,7 @@ func TestRequiredBlocksMissingToken(t *testing.T) {
 				RealmName:      "realm-1",
 				ClientID:       "client-1",
 				ClientSecret:   "secret-1",
-				ValidateAPIUrl: "http://example.com/introspect",
+				ValidateAPIUrl: "http://introspect.invalid",
 			},
 		},
 	}
@@ -79,7 +80,7 @@ func TestRequiredBlocksMissingToken(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/resource", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://service.test/resource", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -106,7 +107,7 @@ func TestOriginRealmMappingUsesRealmCredentials(t *testing.T) {
 		Optional:    false,
 		BaseAuthURL: introspectServer.URL,
 		OriginRealmMap: map[string]string{
-			testOriginHost: expectedRealm,
+			dummyOriginHost: expectedRealm,
 		},
 		Realms: []RealmConfig{
 			{
@@ -129,7 +130,60 @@ func TestOriginRealmMappingUsesRealmCredentials(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "http://service.test/resource", nil)
-	req.Header.Set("Origin", testOriginURL)
+	req.Header.Set("Origin", dummyOriginURL)
+	req.Header.Set("Authorization", "Bearer "+expectedToken)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if gotInjected == "" {
+		t.Fatalf("injectedPayload should be set")
+	}
+}
+
+func TestCustomOriginHeaderUsesMapping(t *testing.T) {
+	t.Helper()
+
+	expectedToken := "abc123"
+	expectedRealm := "realm-1"
+	expectedClientID := "client-1"
+	expectedClientSecret := "secret-1"
+
+	introspectServer := newIntrospectServer(t, expectedRealm, expectedClientID, expectedClientSecret, expectedToken)
+	defer introspectServer.Close()
+
+	cfg := &Config{
+		Optional:     false,
+		BaseAuthURL:  introspectServer.URL,
+		OriginHeader: dummyOriginHeader,
+		OriginRealmMap: map[string]string{
+			dummyOriginHost: expectedRealm,
+		},
+		Realms: []RealmConfig{
+			{
+				RealmName:    expectedRealm,
+				ClientID:     expectedClientID,
+				ClientSecret: expectedClientSecret,
+			},
+		},
+	}
+
+	var gotInjected string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotInjected = r.Header.Get("injectedPayload")
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler, err := New(context.Background(), next, cfg, "test")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://service.test/resource", nil)
+	req.Header.Set(dummyOriginHeader, dummyOriginURL)
 	req.Header.Set("Authorization", "Bearer "+expectedToken)
 
 	rec := httptest.NewRecorder()
@@ -159,7 +213,7 @@ func TestOriginMissingUsesFirstRealm(t *testing.T) {
 		Optional:    false,
 		BaseAuthURL: introspectServer.URL,
 		OriginRealmMap: map[string]string{
-			testOriginHost: secondaryRealm,
+			dummyOriginHost: secondaryRealm,
 		},
 		Realms: []RealmConfig{
 			{
@@ -217,7 +271,7 @@ func TestDefaultRealmUsedWhenNoMatch(t *testing.T) {
 		BaseAuthURL:  introspectServer.URL,
 		DefaultRealm: defaultRealm,
 		OriginRealmMap: map[string]string{
-			testOriginHost: primaryRealm,
+			dummyOriginHost: primaryRealm,
 		},
 		Realms: []RealmConfig{
 			{
@@ -245,7 +299,7 @@ func TestDefaultRealmUsedWhenNoMatch(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "http://service.test/resource", nil)
-	req.Header.Set("Origin", testUnknownOriginURL)
+	req.Header.Set("Origin", dummyUnknownOriginURL)
 	req.Header.Set("Authorization", "Bearer "+expectedToken)
 
 	rec := httptest.NewRecorder()
