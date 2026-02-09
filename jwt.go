@@ -178,24 +178,41 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		j.logDebug("jwt-introspector origin header missing headers=%s", strings.Join(j.originHeaders, ","))
 	}
 
+	// Determine realm: prefer realm extracted from token "iss" claim, fall back to origin mapping, then default
 	realmName := ""
-	ok := false
-	if len(originHost) > 0 {
-		realmName, ok = j.originRealmMap[originHost]
-	}
-	if !ok {
-		realmName = j.defaultRealm
-		if len(originHost) == 0 {
-			j.logDebug("jwt-introspector origin missing using default realm=%s", realmName)
+	// Attempt to extract realm from token's issuer (iss)
+	tokenDerivedRealm := tokenRealm(headerToken)
+	if tokenDerivedRealm != "" {
+		if _, ok := j.realms[tokenDerivedRealm]; ok {
+			realmName = tokenDerivedRealm
+			j.logDebug("jwt-introspector realm derived from token iss realm=%s", realmName)
 		} else {
-			j.logDebug("jwt-introspector origin not mapped using default realm=%s origin=%s", realmName, originLabel)
+			j.logDebug("jwt-introspector realm from token iss not recognized realm=%s", tokenDerivedRealm)
+		}
+	}
+
+	ok := false
+	if realmName == "" {
+		if len(originHost) > 0 {
+			realmName, ok = j.originRealmMap[originHost]
+		}
+		if !ok {
+			realmName = j.defaultRealm
+			if len(originHost) == 0 {
+				j.logDebug("jwt-introspector origin missing using default realm=%s", realmName)
+			} else {
+				j.logDebug("jwt-introspector origin not mapped using default realm=%s origin=%s", realmName, originLabel)
+			}
+		} else {
+			if len(originHeader) > 0 && len(j.originHeaders) > 0 && !strings.EqualFold(originHeader, j.originHeaders[0]) {
+				j.logDebug("jwt-introspector using origin fallback header=%s", originHeader)
+			}
+			j.logDebug("jwt-introspector origin mapped header=%s origin=%s realm=%s", originHeader, originLabel, realmName)
 		}
 	} else {
-		if len(originHeader) > 0 && len(j.originHeaders) > 0 && !strings.EqualFold(originHeader, j.originHeaders[0]) {
-			j.logDebug("jwt-introspector using origin fallback header=%s", originHeader)
-		}
-		j.logDebug("jwt-introspector origin mapped header=%s origin=%s realm=%s", originHeader, originLabel, realmName)
+		j.logDebug("jwt-introspector using realm from token=%s", realmName)
 	}
+
 	realm := j.realms[realmName]
 
 	j.logDebug("jwt-introspector introspecting origin=%s realm=%s", originLabel, realmName)
@@ -416,6 +433,52 @@ func tokenEmail(token string) string {
 		if email, ok := emailValue.(string); ok {
 			return email
 		}
+	}
+
+	return ""
+}
+
+// tokenRealm extracts a Keycloak realm name from the token's 'iss' claim.
+// It returns the realm name if the issuer contains the pattern '/realms/{realm}',
+// otherwise it returns an empty string.
+func tokenRealm(token string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		payload, err = base64.URLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return ""
+		}
+	}
+
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+
+	issValue, ok := claims["iss"]
+	if !ok {
+		return ""
+	}
+	issStr, ok := issValue.(string)
+	if !ok {
+		return ""
+	}
+
+	// Look for '/realms/{realm}' anywhere in the issuer string
+	marker := "/realms/"
+	if idx := strings.Index(issStr, marker); idx >= 0 {
+		remainder := issStr[idx+len(marker):]
+		if len(remainder) == 0 {
+			return ""
+		}
+		realm := strings.SplitN(remainder, "/", 2)[0]
+		realm = strings.TrimSpace(realm)
+		return realm
 	}
 
 	return ""
