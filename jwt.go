@@ -7,20 +7,29 @@ import (
 	"io/ioutil"
 	"net/http"
 	"strings"
+
+	"github.com/traefik/traefik/v2/pkg/log"
 )
 
 type Config struct {
-	ProxyHeaderName string `json:"proxyHeaderName,omitempty"`
-	AuthHeader      string `json:"authHeader,omitempty"`
-	HeaderPrefix    string `json:"headerPrefix,omitempty"`
-	Optional        bool   `json:"optional,omitempty"`
-	ValidateAPIUrl  string `json:"validateAPIUrl,omitempty"`
-	ClientID        string `json:"clientID,omitempty"`
-	ClientSecret    string `json:"clientSecret,omitempty"`
+	ProxyHeaderName string            `json:"proxyHeaderName,omitempty"`
+	AuthHeader      string            `json:"authHeader,omitempty"`
+	HeaderPrefix    string            `json:"headerPrefix,omitempty"`
+	Optional        bool              `json:"optional,omitempty"`
+	BaseAuthURL     string            `json:"baseAuthUrl,omitempty"`
+	Realms          []RealmConfig     `json:"realms,omitempty"`
+	HostRealmMap    map[string]string `json:"hostRealmMap,omitempty"`
 }
 
 func CreateConfig() *Config {
 	return &Config{}
+}
+
+type RealmConfig struct {
+	RealmName      string `json:"realmName,omitempty"`
+	ClientID       string `json:"clientId,omitempty"`
+	ClientSecret   string `json:"clientSecret,omitempty"`
+	ValidateAPIUrl string `json:"validateAPIUrl,omitempty"`
 }
 
 type JWT struct {
@@ -30,9 +39,8 @@ type JWT struct {
 	authHeader      string
 	headerPrefix    string
 	optional        bool
-	clientID        string
-	clientSecret    string
-	validateAPIUrl  string
+	realms          map[string]RealmConfig
+	hostRealmMap    map[string]string
 }
 
 type ApiResponse struct {
@@ -51,8 +59,43 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	if len(config.HeaderPrefix) == 0 {
 		config.HeaderPrefix = "Bearer"
 	}
-	if len(config.ValidateAPIUrl) == 0 {
-		return nil, fmt.Errorf("validateAPIUrl cannot be empty")
+	if len(config.Realms) == 0 {
+		return nil, fmt.Errorf("realms cannot be empty")
+	}
+	if len(config.HostRealmMap) == 0 {
+		return nil, fmt.Errorf("hostRealmMap cannot be empty")
+	}
+
+	realms := map[string]RealmConfig{}
+	for _, realm := range config.Realms {
+		if len(realm.RealmName) == 0 {
+			return nil, fmt.Errorf("realmName cannot be empty")
+		}
+		if len(realm.ClientID) == 0 {
+			return nil, fmt.Errorf("clientId cannot be empty for realm %s", realm.RealmName)
+		}
+		if len(realm.ClientSecret) == 0 {
+			return nil, fmt.Errorf("clientSecret cannot be empty for realm %s", realm.RealmName)
+		}
+		if len(realm.ValidateAPIUrl) == 0 {
+			if len(config.BaseAuthURL) == 0 {
+				return nil, fmt.Errorf("baseAuthUrl cannot be empty when validateAPIUrl is not set for realm %s", realm.RealmName)
+			}
+			baseURL := strings.TrimRight(config.BaseAuthURL, "/")
+			realm.ValidateAPIUrl = fmt.Sprintf("%s/realms/%s/protocol/openid-connect/token/introspect", baseURL, realm.RealmName)
+		}
+		realms[realm.RealmName] = realm
+	}
+
+	hostRealmMap := map[string]string{}
+	for host, realmName := range config.HostRealmMap {
+		if len(host) == 0 || len(realmName) == 0 {
+			return nil, fmt.Errorf("hostRealmMap entries cannot be empty")
+		}
+		if _, ok := realms[realmName]; !ok {
+			return nil, fmt.Errorf("hostRealmMap references unknown realm %s", realmName)
+		}
+		hostRealmMap[strings.ToLower(host)] = realmName
 	}
 
 	return &JWT{
@@ -62,24 +105,17 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		authHeader:      config.AuthHeader,
 		headerPrefix:    config.HeaderPrefix,
 		optional:        config.Optional,
-		clientID:        config.ClientID,
-		clientSecret:    config.ClientSecret,
-		validateAPIUrl:  config.ValidateAPIUrl,
+		realms:          realms,
+		hostRealmMap:    hostRealmMap,
 	}, nil
 }
 
 func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
-//     // Retrieve the logger from the context
-//     logger := log.FromContext(req.Context())
-//
-//     // Log a debug message
-//     logger.Debug("Processing request", "url", req.URL.String())
+	logger := log.FromContext(req.Context())
 
-    // Continue with your plugin logic...
-
-
-	headerToken := strings.TrimPrefix(req.Header.Get(j.authHeader), "Bearer ")
+	headerValue := req.Header.Get(j.authHeader)
+	headerToken := strings.TrimPrefix(headerValue, j.headerPrefix+" ")
 
 	// Delete the header we inject if they already are in the request
 	// to avoid people trying to inject stuff
@@ -94,10 +130,29 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	payloadString := "client_secret=" + j.clientSecret + "&client_id=" + j.clientID + "&token=" + headerToken
+	host := strings.ToLower(req.Host)
+	if len(host) == 0 {
+		host = strings.ToLower(req.URL.Host)
+	}
+	host = strings.Split(host, ":")[0]
+	realmName, ok := j.hostRealmMap[host]
+	if !ok {
+		errorMessageTxt := "realm not configured for host"
+		http.Error(res, errorMessageTxt, http.StatusUnauthorized)
+		return
+	}
+	realm := j.realms[realmName]
+
+	logger.Debug("Introspecting token", "host", host, "realm", realmName)
+
+	clientID := realm.ClientID
+	clientSecret := realm.ClientSecret
+	validateAPIUrl := realm.ValidateAPIUrl
+
+	payloadString := "client_secret=" + clientSecret + "&client_id=" + clientID + "&token=" + headerToken
 
 	// Check token via API call
-	apiUrl := j.validateAPIUrl
+	apiUrl := validateAPIUrl
 	payload := strings.NewReader(payloadString)
 
 	newReq, err := http.NewRequest("POST", apiUrl, payload)
@@ -122,6 +177,8 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	}
 
 	defer apiRes.Body.Close()
+
+	logger.Debug("Introspection response", "host", host, "realm", realmName, "status", apiRes.StatusCode)
 
 	// Check API response status code
 	if apiRes.StatusCode != http.StatusOK {

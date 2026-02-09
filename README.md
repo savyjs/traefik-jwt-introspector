@@ -4,7 +4,7 @@ JWT Middleware API Validator is a middleware plugin for [Traefik](https://github
 
 
 Meaning that if the authorization code is in the request, it will get checked, and if it does, the request will go through.
-The way the request is checked is by sending a GET request to a specific endpoint that you can override with `ValidateAPIUrl`. 
+The way the request is checked is by sending a POST request to a realm introspection endpoint configured per realm (`validateAPIUrl` or `baseAuthUrl` + `realmName`).
 If it returns a { active: true , ... } response, it will go through.
 
 If you want to check that a request is authenticated you'll need to verify that there is a `Authorization` header in your request.
@@ -25,7 +25,7 @@ command:
   - "--experimental.plugins.traefik-jwt-optional-api-validator.version=v0.0.14"
 ```
 
-Activate plugin in your config  
+Activate plugin in your config (host-based realms)
 
 ```yaml
 http:
@@ -37,10 +37,20 @@ http:
           authHeader: Authorization
           headerPrefix: Bearer
           optional: true
-          clientID: 
-          clientSecret:
-          validateAPIUrl: http://yourKeycloakDomainAPI/realms/realm-name/protocol/openid-connect/token/introspect
+          baseAuthUrl: https://auth.dev.thewebstage.com
+          hostRealmMap:
+            oobo.416-flowers.com: back-office
+            api.416-flowers.com: 416-flowers.com
+          realms:
+            - realmName: back-office
+              clientId: gateway
+              clientSecret: your-secret
+            - realmName: 416-flowers.com
+              clientId: gateway
+              clientSecret: your-secret
 ```
+
+The realm is selected using the request host name (without port) and the `hostRealmMap` entry.
 
 Use as docker-compose label  
 ```yaml
