@@ -7,6 +7,7 @@ testData:
   optional: true
   logLevel: none
   defaultRealm: example
+  originHeader: Origin
   originRealmMap:
     example.com: example
     localhost: example
