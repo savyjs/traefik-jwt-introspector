@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -17,7 +18,8 @@ type Config struct {
 	Optional        bool              `json:"optional,omitempty"`
 	BaseAuthURL     string            `json:"baseAuthUrl,omitempty"`
 	Realms          []RealmConfig     `json:"realms,omitempty"`
-	HostRealmMap    map[string]string `json:"hostRealmMap,omitempty"`
+	OriginRealmMap  map[string]string `json:"originRealmMap,omitempty"`
+	DefaultRealm    string            `json:"defaultRealm,omitempty"`
 	LogLevel        string            `json:"logLevel,omitempty"`
 }
 
@@ -40,7 +42,8 @@ type JWT struct {
 	headerPrefix    string
 	optional        bool
 	realms          map[string]RealmConfig
-	hostRealmMap    map[string]string
+	originRealmMap  map[string]string
+	defaultRealm    string
 	logLevel        string
 }
 
@@ -70,9 +73,6 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	if len(config.Realms) == 0 {
 		return nil, fmt.Errorf("realms cannot be empty")
 	}
-	if len(config.HostRealmMap) == 0 {
-		return nil, fmt.Errorf("hostRealmMap cannot be empty")
-	}
 
 	realms := map[string]RealmConfig{}
 	for _, realm := range config.Realms {
@@ -95,15 +95,25 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		realms[realm.RealmName] = realm
 	}
 
-	hostRealmMap := map[string]string{}
-	for host, realmName := range config.HostRealmMap {
+	defaultRealm := strings.TrimSpace(config.DefaultRealm)
+	if len(defaultRealm) == 0 {
+		defaultRealm = config.Realms[0].RealmName
+	}
+	if len(defaultRealm) > 0 {
+		if _, ok := realms[defaultRealm]; !ok {
+			return nil, fmt.Errorf("defaultRealm references unknown realm %s", defaultRealm)
+		}
+	}
+
+	originRealmMap := map[string]string{}
+	for host, realmName := range config.OriginRealmMap {
 		if len(host) == 0 || len(realmName) == 0 {
-			return nil, fmt.Errorf("hostRealmMap entries cannot be empty")
+			return nil, fmt.Errorf("originRealmMap entries cannot be empty")
 		}
 		if _, ok := realms[realmName]; !ok {
-			return nil, fmt.Errorf("hostRealmMap references unknown realm %s", realmName)
+			return nil, fmt.Errorf("originRealmMap references unknown realm %s", realmName)
 		}
-		hostRealmMap[strings.ToLower(host)] = realmName
+		originRealmMap[strings.ToLower(host)] = realmName
 	}
 
 	return &JWT{
@@ -114,7 +124,8 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		headerPrefix:    config.HeaderPrefix,
 		optional:        config.Optional,
 		realms:          realms,
-		hostRealmMap:    hostRealmMap,
+		originRealmMap:  originRealmMap,
+		defaultRealm:    defaultRealm,
 		logLevel:        logLevel,
 	}, nil
 }
@@ -137,21 +148,40 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	host := strings.ToLower(req.Host)
-	if len(host) == 0 {
-		host = strings.ToLower(req.URL.Host)
-	}
-	host = strings.Split(host, ":")[0]
-	realmName, ok := j.hostRealmMap[host]
-	if !ok {
-		j.logError("jwt-introspector realm not configured host=%s", host)
-		errorMessageTxt := "realm not configured for host"
+	originHost, err := originHost(req)
+	if err != nil {
+		j.logError("jwt-introspector invalid origin error=%s", err.Error())
+		errorMessageTxt := "origin not configured"
 		http.Error(res, errorMessageTxt, http.StatusUnauthorized)
 		return
 	}
+	originLabel := originHost
+	if len(originLabel) == 0 {
+		originLabel = "missing"
+	}
+
+	realmName := ""
+	ok := false
+	if len(originHost) > 0 {
+		realmName, ok = j.originRealmMap[originHost]
+	}
+	if !ok {
+		if len(j.defaultRealm) == 0 {
+			j.logError("jwt-introspector realm not configured origin=%s", originLabel)
+			errorMessageTxt := "realm not configured"
+			http.Error(res, errorMessageTxt, http.StatusUnauthorized)
+			return
+		}
+		realmName = j.defaultRealm
+		if len(originHost) == 0 {
+			j.logDebug("jwt-introspector origin missing using default realm=%s", realmName)
+		} else {
+			j.logDebug("jwt-introspector origin not mapped using default realm=%s origin=%s", realmName, originLabel)
+		}
+	}
 	realm := j.realms[realmName]
 
-	j.logDebug("jwt-introspector introspecting host=%s realm=%s", host, realmName)
+	j.logDebug("jwt-introspector introspecting origin=%s realm=%s", originLabel, realmName)
 
 	clientID := realm.ClientID
 	clientSecret := realm.ClientSecret
@@ -178,7 +208,7 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	apiRes, err := client.Do(newReq)
 
 	if err != nil {
-		j.logError("jwt-introspector introspection request error host=%s realm=%s", host, realmName)
+		j.logError("jwt-introspector introspection request error origin=%s realm=%s", originLabel, realmName)
 		res.Header().Set("Content-Type", "application/json")
 		errorMessageTxt := "internal error"
 		http.Error(res, errorMessageTxt, http.StatusInternalServerError)
@@ -187,11 +217,11 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
 	defer apiRes.Body.Close()
 
-	j.logDebug("jwt-introspector introspection response host=%s realm=%s status=%d", host, realmName, apiRes.StatusCode)
+	j.logDebug("jwt-introspector introspection response origin=%s realm=%s status=%d", originLabel, realmName, apiRes.StatusCode)
 
 	// Check API response status code
 	if apiRes.StatusCode != http.StatusOK {
-		j.logError("jwt-introspector introspection non-200 host=%s realm=%s status=%d", host, realmName, apiRes.StatusCode)
+		j.logError("jwt-introspector introspection non-200 origin=%s realm=%s status=%d", originLabel, realmName, apiRes.StatusCode)
 		res.Header().Set("Content-Type", "application/json")
 		res.WriteHeader(apiRes.StatusCode)
 		body, err := ioutil.ReadAll(apiRes.Body)
@@ -208,7 +238,7 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
 	body, err := ioutil.ReadAll(apiRes.Body)
 	if err != nil {
-		j.logError("jwt-introspector read response error host=%s realm=%s", host, realmName)
+		j.logError("jwt-introspector read response error origin=%s realm=%s", originLabel, realmName)
 		errorMessageTxt := "error reading response body"
 		http.Error(res, errorMessageTxt, http.StatusInternalServerError)
 		return
@@ -217,7 +247,7 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	var response ApiResponse
 	err = json.Unmarshal(body, &response)
 	if err != nil {
-		j.logError("jwt-introspector unmarshal error host=%s realm=%s", host, realmName)
+		j.logError("jwt-introspector unmarshal error origin=%s realm=%s", originLabel, realmName)
 		errorMessageTxt := "error unmarshalling JSON"
 		http.Error(res, errorMessageTxt, http.StatusInternalServerError)
 		return
@@ -225,17 +255,35 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
 	// Check if the response has { "active": true }
 	if response.Active {
-		j.logInfo("jwt-introspector token active host=%s realm=%s", host, realmName)
+		j.logInfo("jwt-introspector token active origin=%s realm=%s", originLabel, realmName)
 		req.Header.Set(j.proxyHeaderName, string(body))
 		j.next.ServeHTTP(res, req)
 		return
 	} else {
-		j.logInfo("jwt-introspector token inactive host=%s realm=%s", host, realmName)
+		j.logInfo("jwt-introspector token inactive origin=%s realm=%s", originLabel, realmName)
 		errorMessageTxt := "invalid token"
 		http.Error(res, errorMessageTxt, http.StatusUnauthorized)
 		return
 	}
 
+}
+
+func originHost(req *http.Request) (string, error) {
+	origin := strings.TrimSpace(req.Header.Get("Origin"))
+	if len(origin) == 0 {
+		return "", nil
+	}
+
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Host == "" {
+		return "", fmt.Errorf("invalid origin")
+	}
+	host := strings.ToLower(parsed.Host)
+	host = strings.Split(host, ":")[0]
+	if len(host) == 0 {
+		return "", fmt.Errorf("invalid origin")
+	}
+	return host, nil
 }
 
 func isValidLogLevel(level string) bool {

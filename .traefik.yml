@@ -6,7 +6,8 @@ summary: 'Verify JWT token in auth header, optional mode, inject payload, and su
 testData:
   optional: true
   logLevel: none
-  hostRealmMap:
+  defaultRealm: example
+  originRealmMap:
     example.com: example
     localhost: example
     127.0.0.1: example
