@@ -37,6 +37,7 @@ http:
           authHeader: Authorization
           headerPrefix: Bearer
           optional: true
+          logLevel: debug
           baseAuthUrl: https://auth.dev.thewebstage.com
           hostRealmMap:
             oobo.416-flowers.com: back-office
@@ -51,6 +52,7 @@ http:
 ```
 
 The realm is selected using the request host name (without port) and the `hostRealmMap` entry.
+`logLevel` can be one of `none`, `all`, `error`, `info`, `debug` (default: `none`). Logs do not include tokens or secrets.
 
 Use as docker-compose label  
 ```yaml
