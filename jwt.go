@@ -7,25 +7,21 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 type Config struct {
-	ProxyHeaderName       string            `json:"proxyHeaderName,omitempty"`
-	AuthHeader            string            `json:"authHeader,omitempty"`
-	HeaderPrefix          string            `json:"headerPrefix,omitempty"`
-	Optional              bool              `json:"optional,omitempty"`
-	BaseAuthURL           string            `json:"baseAuthUrl,omitempty"`
-	Realms                []RealmConfig     `json:"realms,omitempty"`
-	OriginRealmMap        map[string]string `json:"originRealmMap,omitempty"`
-	OriginHeader          string            `json:"originHeader,omitempty"`
-	OriginHeaderFallbacks []string          `json:"originHeaderFallbacks,omitempty"`
-	DefaultRealm          string            `json:"defaultRealm,omitempty"`
-	LogLevel              string            `json:"logLevel,omitempty"`
+	ProxyHeaderName string        `json:"proxyHeaderName,omitempty"`
+	AuthHeader      string        `json:"authHeader,omitempty"`
+	HeaderPrefix    string        `json:"headerPrefix,omitempty"`
+	Optional        bool          `json:"optional,omitempty"`
+	BaseAuthURL     string        `json:"baseAuthUrl,omitempty"`
+	Realms          []RealmConfig `json:"realms,omitempty"`
+	DefaultRealm    string        `json:"defaultRealm,omitempty"`
+	LogLevel        string        `json:"logLevel,omitempty"`
 }
 
 func CreateConfig() *Config {
@@ -47,8 +43,6 @@ type JWT struct {
 	headerPrefix    string
 	optional        bool
 	realms          map[string]RealmConfig
-	originRealmMap  map[string]string
-	originHeaders   []string
 	defaultRealm    string
 	logLevel        string
 	infoLogger      *log.Logger
@@ -78,7 +72,6 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	if !isValidLogLevel(logLevel) {
 		return nil, fmt.Errorf("invalid logLevel %q", config.LogLevel)
 	}
-	originHeaders := normalizeOriginHeaders(config.OriginHeader, config.OriginHeaderFallbacks)
 	if len(config.Realms) == 0 {
 		return nil, fmt.Errorf("realms cannot be empty")
 	}
@@ -114,17 +107,6 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		}
 	}
 
-	originRealmMap := map[string]string{}
-	for host, realmName := range config.OriginRealmMap {
-		if len(host) == 0 || len(realmName) == 0 {
-			return nil, fmt.Errorf("originRealmMap entries cannot be empty")
-		}
-		if _, ok := realms[realmName]; !ok {
-			return nil, fmt.Errorf("originRealmMap references unknown realm %s", realmName)
-		}
-		originRealmMap[strings.ToLower(host)] = realmName
-	}
-
 	infoLogger := log.New(os.Stdout, "", log.LstdFlags)
 	errorLogger := log.New(os.Stderr, "", log.LstdFlags)
 
@@ -136,8 +118,6 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		headerPrefix:    config.HeaderPrefix,
 		optional:        config.Optional,
 		realms:          realms,
-		originRealmMap:  originRealmMap,
-		originHeaders:   originHeaders,
 		defaultRealm:    defaultRealm,
 		logLevel:        logLevel,
 		infoLogger:      infoLogger,
@@ -149,79 +129,50 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
 	headerValue := req.Header.Get(j.authHeader)
 	headerToken := strings.TrimPrefix(headerValue, j.headerPrefix+" ")
+	if len(headerValue) > 0 && !strings.HasPrefix(headerValue, j.headerPrefix+" ") {
+		j.logDebug("auth_header_prefix_missing", "authHeader=%s prefix=%s", j.authHeader, j.headerPrefix)
+	}
 
 	// Delete the header we inject if they already are in the request
 	// to avoid people trying to inject stuff
 	req.Header.Del(j.proxyHeaderName)
 
 	if j.optional == true && len(headerToken) == 0 {
-		j.logDebug("jwt-introspector no token and optional; skipping")
+		j.logDebug("no_token_optional", "authHeader=%s", j.authHeader)
 		j.next.ServeHTTP(res, req)
 		return
 	} else if j.optional == false && len(headerToken) == 0 {
-		j.logInfo("jwt-introspector no token; access denied")
+		j.logInfo("no_token_denied", "authHeader=%s", j.authHeader)
 		errorMessageTxt := "access denied"
 		http.Error(res, errorMessageTxt, http.StatusUnauthorized)
 		return
 	}
 
-	originHost, originHeader, err := originHost(req, j.originHeaders)
-	if err != nil {
-		j.logDebug("jwt-introspector invalid origin header=%s error=%s", originHeader, err.Error())
-		originHost = ""
-	}
-	originLabel := originHost
-	if len(originLabel) == 0 {
-		originLabel = "missing"
-	}
-	if len(originHost) == 0 && len(originHeader) == 0 {
-		j.logDebug("jwt-introspector origin header missing headers=%s", strings.Join(j.originHeaders, ","))
-	}
-
-	// Determine realm: prefer realm extracted from token "iss" claim, fall back to origin mapping, then default
+	// Determine realm: prefer realm extracted from token "iss" claim, fall back to default
 	realmName := ""
-	// Attempt to extract realm from token's issuer (iss)
 	tokenDerivedRealm := tokenRealm(headerToken)
 	if tokenDerivedRealm != "" {
 		if _, ok := j.realms[tokenDerivedRealm]; ok {
 			realmName = tokenDerivedRealm
-			j.logDebug("jwt-introspector realm derived from token iss realm=%s", realmName)
+			j.logDebug("realm_selected_token", "realm=%s", realmName)
 		} else {
-			j.logDebug("jwt-introspector realm from token iss not recognized realm=%s", tokenDerivedRealm)
-		}
-	}
-
-	ok := false
-	if realmName == "" {
-		if len(originHost) > 0 {
-			realmName, ok = j.originRealmMap[originHost]
-		}
-		if !ok {
 			realmName = j.defaultRealm
-			if len(originHost) == 0 {
-				j.logDebug("jwt-introspector origin missing using default realm=%s", realmName)
-			} else {
-				j.logDebug("jwt-introspector origin not mapped using default realm=%s origin=%s", realmName, originLabel)
-			}
-		} else {
-			if len(originHeader) > 0 && len(j.originHeaders) > 0 && !strings.EqualFold(originHeader, j.originHeaders[0]) {
-				j.logDebug("jwt-introspector using origin fallback header=%s", originHeader)
-			}
-			j.logDebug("jwt-introspector origin mapped header=%s origin=%s realm=%s", originHeader, originLabel, realmName)
+			j.logDebug("realm_selected_default_unknown", "defaultRealm=%s tokenRealm=%s", realmName, tokenDerivedRealm)
 		}
 	} else {
-		j.logDebug("jwt-introspector using realm from token=%s", realmName)
+		realmName = j.defaultRealm
+		j.logDebug("realm_selected_default_missing", "defaultRealm=%s", realmName)
 	}
 
 	realm := j.realms[realmName]
 
-	j.logDebug("jwt-introspector introspecting origin=%s realm=%s", originLabel, realmName)
+	j.logDebug("introspect_start", "realm=%s", realmName)
 
 	email := ""
 	if j.shouldLog("info") {
 		email = tokenEmail(headerToken)
 		if email == "" && j.shouldLog("debug") {
-			j.logDebug("jwt-introspector token email not present")
+			j.logDebug("token_email_missing", "realm=%s", realmName)
 		}
 	}
 
@@ -233,7 +184,7 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
 	// Check token via API call
 	apiUrl := validateAPIUrl
-	j.logDebug("jwt-introspector introspection url=%s realm=%s", apiUrl, realmName)
+	j.logDebug("introspect_url", "url=%s realm=%s", apiUrl, realmName)
 	payload := strings.NewReader(payloadString)
 
 	newReq, err := http.NewRequest("POST", apiUrl, payload)
@@ -248,10 +199,12 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	newReq.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 
 	client := &http.Client{}
+	introspectStart := time.Now()
 	apiRes, err := client.Do(newReq)
 
 	if err != nil {
-		j.logError("jwt-introspector introspection request error origin=%s realm=%s", originLabel, realmName)
+		durationMs := time.Since(introspectStart).Milliseconds()
+		j.logError("introspect_request_error", "realm=%s duration_ms=%d error=%s", realmName, durationMs, err.Error())
 		res.Header().Set("Content-Type", "application/json")
 		errorMessageTxt := "internal error"
 		http.Error(res, errorMessageTxt, http.StatusInternalServerError)
@@ -260,11 +213,12 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
 	defer apiRes.Body.Close()
 
-	j.logDebug("jwt-introspector introspection response origin=%s realm=%s status=%d", originLabel, realmName, apiRes.StatusCode)
+	durationMs := time.Since(introspectStart).Milliseconds()
+	j.logDebug("introspect_response", "realm=%s status=%d duration_ms=%d", realmName, apiRes.StatusCode, durationMs)
 
 	// Check API response status code
 	if apiRes.StatusCode != http.StatusOK {
-		j.logError("jwt-introspector introspection non-200 origin=%s realm=%s status=%d", originLabel, realmName, apiRes.StatusCode)
+		j.logError("introspect_non_200", "realm=%s status=%d", realmName, apiRes.StatusCode)
 		res.Header().Set("Content-Type", "application/json")
 		res.WriteHeader(apiRes.StatusCode)
 		body, err := ioutil.ReadAll(apiRes.Body)
@@ -281,7 +235,7 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
 	body, err := ioutil.ReadAll(apiRes.Body)
 	if err != nil {
-		j.logError("jwt-introspector read response error origin=%s realm=%s", originLabel, realmName)
+		j.logError("introspect_read_error", "realm=%s", realmName)
 		errorMessageTxt := "error reading response body"
 		http.Error(res, errorMessageTxt, http.StatusInternalServerError)
 		return
@@ -290,7 +244,7 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	var response ApiResponse
 	err = json.Unmarshal(body, &response)
 	if err != nil {
-		j.logError("jwt-introspector unmarshal error origin=%s realm=%s", originLabel, realmName)
+		j.logError("introspect_unmarshal_error", "realm=%s", realmName)
 		errorMessageTxt := "error unmarshalling JSON"
 		http.Error(res, errorMessageTxt, http.StatusInternalServerError)
 		return
@@ -299,115 +253,24 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	// Check if the response has { "active": true }
 	if response.Active {
 		if email != "" {
-			j.logInfo("jwt-introspector token active origin=%s realm=%s email=%s", originLabel, realmName, email)
+			j.logInfo("token_active_email", "realm=%s email=%s", realmName, email)
 		} else {
-			j.logInfo("jwt-introspector token active origin=%s realm=%s", originLabel, realmName)
+			j.logInfo("token_active_no_email", "realm=%s", realmName)
 		}
 		req.Header.Set(j.proxyHeaderName, string(body))
 		j.next.ServeHTTP(res, req)
 		return
 	} else {
 		if email != "" {
-			j.logInfo("jwt-introspector token inactive origin=%s realm=%s email=%s", originLabel, realmName, email)
+			j.logInfo("token_inactive_email", "realm=%s email=%s", realmName, email)
 		} else {
-			j.logInfo("jwt-introspector token inactive origin=%s realm=%s", originLabel, realmName)
+			j.logInfo("token_inactive_no_email", "realm=%s", realmName)
 		}
 		errorMessageTxt := "invalid token"
 		http.Error(res, errorMessageTxt, http.StatusUnauthorized)
 		return
 	}
 
-}
-
-func normalizeOriginHeaders(primary string, fallbacks []string) []string {
-	headers := []string{}
-	seen := map[string]struct{}{}
-
-	addHeader := func(header string) {
-		header = strings.TrimSpace(header)
-		if len(header) == 0 {
-			return
-		}
-		key := strings.ToLower(header)
-		if _, ok := seen[key]; ok {
-			return
-		}
-		seen[key] = struct{}{}
-		headers = append(headers, http.CanonicalHeaderKey(header))
-	}
-
-	addHeader(primary)
-	for _, fallback := range fallbacks {
-		addHeader(fallback)
-	}
-	if len(headers) == 0 {
-		addHeader("Origin")
-	}
-
-	return headers
-}
-
-func originHost(req *http.Request, headers []string) (string, string, error) {
-	for _, headerName := range headers {
-		raw := strings.TrimSpace(req.Header.Get(headerName))
-		if len(raw) == 0 {
-			continue
-		}
-		value := strings.TrimSpace(strings.Split(raw, ",")[0])
-		if len(value) == 0 {
-			continue
-		}
-		if strings.EqualFold(value, "null") || strings.EqualFold(value, "undefined") {
-			return "", headerName, nil
-		}
-		host, err := hostFromOriginValue(value)
-		if err != nil {
-			return "", headerName, err
-		}
-		return host, headerName, nil
-	}
-
-	return "", "", nil
-}
-
-func hostFromOriginValue(value string) (string, error) {
-	if strings.Contains(value, "://") {
-		parsed, err := url.Parse(value)
-		if err != nil || parsed.Host == "" {
-			return "", fmt.Errorf("invalid origin")
-		}
-		return normalizeHost(parsed.Host)
-	}
-
-	if strings.Contains(value, "/") {
-		parsed, err := url.Parse("http://" + value)
-		if err == nil && parsed.Host != "" {
-			return normalizeHost(parsed.Host)
-		}
-	}
-
-	return normalizeHost(value)
-}
-
-func normalizeHost(host string) (string, error) {
-	host = strings.TrimSpace(host)
-	host = strings.Trim(host, "[]")
-	if len(host) == 0 {
-		return "", fmt.Errorf("invalid origin")
-	}
-	if strings.Contains(host, ":") {
-		if cleanHost, _, err := net.SplitHostPort(host); err == nil {
-			host = cleanHost
-		} else {
-			host = strings.Split(host, ":")[0]
-		}
-	}
-	host = strings.Trim(host, "[]")
-	host = strings.ToLower(host)
-	if len(host) == 0 {
-		return "", fmt.Errorf("invalid origin")
-	}
-	return host, nil
 }
 
 func tokenEmail(token string) string {
@@ -493,34 +356,34 @@ func isValidLogLevel(level string) bool {
 	}
 }
 
-func (j *JWT) logDebug(format string, args ...interface{}) {
+func (j *JWT) logDebug(event string, format string, args ...interface{}) {
 	if !j.shouldLog("debug") {
 		return
 	}
 	if j.infoLogger == nil {
 		j.infoLogger = log.New(os.Stdout, "", log.LstdFlags)
 	}
-	j.infoLogger.Printf("DEBUG %s", fmt.Sprintf(format, args...))
+	j.infoLogger.Printf("DEBUG event=%s %s", event, fmt.Sprintf(format, args...))
 }
 
-func (j *JWT) logInfo(format string, args ...interface{}) {
+func (j *JWT) logInfo(event string, format string, args ...interface{}) {
 	if !j.shouldLog("info") {
 		return
 	}
 	if j.infoLogger == nil {
 		j.infoLogger = log.New(os.Stdout, "", log.LstdFlags)
 	}
-	j.infoLogger.Printf("INFO %s", fmt.Sprintf(format, args...))
+	j.infoLogger.Printf("INFO event=%s %s", event, fmt.Sprintf(format, args...))
 }
 
-func (j *JWT) logError(format string, args ...interface{}) {
+func (j *JWT) logError(event string, format string, args ...interface{}) {
 	if !j.shouldLog("error") {
 		return
 	}
 	if j.errorLogger == nil {
 		j.errorLogger = log.New(os.Stderr, "", log.LstdFlags)
 	}
-	j.errorLogger.Printf("ERROR %s", fmt.Sprintf(format, args...))
+	j.errorLogger.Printf("ERROR event=%s %s", event, fmt.Sprintf(format, args...))
 }
 
 func (j *JWT) shouldLog(level string) bool {

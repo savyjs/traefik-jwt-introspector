@@ -1,17 +1,12 @@
 displayName: JWT Middleware Optional
 type: middleware
 import: github.com/savyjs/traefik-jwt-introspector
-summary: 'Verify JWT token in auth header, optional mode, inject payload, and support host-based realm mapping'
+summary: 'Verify JWT token in auth header, optional mode, inject payload, and support multi-realm introspection'
 
 testData:
   optional: true
   logLevel: none
   defaultRealm: example
-  originHeader: Origin
-  originRealmMap:
-    example.com: example
-    localhost: example
-    127.0.0.1: example
   realms:
     - realmName: example
       clientId: client-id
