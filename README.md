@@ -25,7 +25,7 @@ command:
   - "--experimental.plugins.traefik-jwt-optional-api-validator.version=v0.0.14"
 ```
 
-Activate plugin in your config (origin-based realms)
+Activate plugin in your config
 
 ```yaml
 http:
@@ -39,13 +39,7 @@ http:
           optional: true
           logLevel: debug
           baseAuthUrl: https://auth.my-domain.com
-          originHeader: X-Client-Origin
-          originHeaderFallbacks:
-            - Origin
           defaultRealm: realm-1
-          originRealmMap:
-            domain-1.com: realm-1
-            domain-2.com: realm-2
           realms:
             - realmName: realm-1
               clientId: gateway
@@ -55,7 +49,7 @@ http:
               clientSecret: your-secret
 ```
 
-The realm is selected using the configured origin header host (without port) and the `originRealmMap` entry. If the origin header is missing or not mapped, `defaultRealm` is used; when `defaultRealm` is not set, the first `realms` entry is used. `originHeader` (default: `Origin`) sets the primary header key and `originHeaderFallbacks` can be used for exceptions.
+The realm is selected using the token `iss` claim (pattern `/realms/{realm}`) when it matches a configured realm. If no match is found, `defaultRealm` is used; when `defaultRealm` is not set, the first `realms` entry is used.
 `logLevel` can be one of `none`, `all`, `error`, `info`, `debug` (default: `none`). Logs do not include tokens or secrets; when available, the token `email` claim is logged at info level.
 
 Use as docker-compose label  
