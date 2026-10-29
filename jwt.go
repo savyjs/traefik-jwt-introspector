@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -142,7 +144,7 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		j.next.ServeHTTP(res, req)
 		return
 	} else if j.optional == false && len(headerToken) == 0 {
-		j.logInfo("no_token_denied", "authHeader=%s", j.authHeader)
+		j.logInfo("no_token_denied", "authHeader=%s %s", j.authHeader, requestFields(req))
 		errorMessageTxt := "access denied"
 		http.Error(res, errorMessageTxt, http.StatusUnauthorized)
 		return
@@ -250,21 +252,33 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Who sent the request: verified introspection claims for active tokens,
+	// unverified token claims for inactive ones (Keycloak returns only active=false).
+	who := ""
+	if j.shouldLog("info") {
+		if response.Active {
+			who = "claims=introspection " + identityFields(decodeClaims(body))
+		} else {
+			who = "claims=token " + identityFields(tokenClaims(headerToken))
+		}
+		who += " " + requestFields(req)
+	}
+
 	// Check if the response has { "active": true }
 	if response.Active {
 		if email != "" {
-			j.logInfo("token_active_email", "realm=%s email=%s", realmName, email)
+			j.logInfo("token_active_email", "realm=%s email=%s %s", realmName, email, who)
 		} else {
-			j.logInfo("token_active_no_email", "realm=%s", realmName)
+			j.logInfo("token_active_no_email", "realm=%s %s", realmName, who)
 		}
 		req.Header.Set(j.proxyHeaderName, string(body))
 		j.next.ServeHTTP(res, req)
 		return
 	} else {
 		if email != "" {
-			j.logInfo("token_inactive_email", "realm=%s email=%s", realmName, email)
+			j.logInfo("token_inactive_email", "realm=%s email=%s %s", realmName, email, who)
 		} else {
-			j.logInfo("token_inactive_no_email", "realm=%s", realmName)
+			j.logInfo("token_inactive_no_email", "realm=%s %s", realmName, who)
 		}
 		errorMessageTxt := "invalid token"
 		http.Error(res, errorMessageTxt, http.StatusUnauthorized)
@@ -273,53 +287,101 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
 }
 
-func tokenEmail(token string) string {
+// tokenClaims decodes the JWT payload without verifying it; use only for logging and routing.
+func tokenClaims(token string) map[string]interface{} {
 	parts := strings.Split(token, ".")
 	if len(parts) < 2 {
-		return ""
+		return nil
 	}
 
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		payload, err = base64.URLEncoding.DecodeString(parts[1])
 		if err != nil {
-			return ""
+			return nil
 		}
 	}
 
+	return decodeClaims(payload)
+}
+
+// decodeClaims keeps numbers as written, so ids like 123456 don't log as 1.23456e+05.
+func decodeClaims(data []byte) map[string]interface{} {
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.UseNumber()
 	var claims map[string]interface{}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return ""
+	if err := decoder.Decode(&claims); err != nil {
+		return nil
 	}
+	return claims
+}
 
-	if emailValue, ok := claims["email"]; ok {
-		if email, ok := emailValue.(string); ok {
-			return email
+func tokenEmail(token string) string {
+	return claimString(tokenClaims(token), "email")
+}
+
+// claimString returns the first non-empty claim among keys.
+func claimString(claims map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := claims[key]; ok && value != nil {
+			if s := fmt.Sprint(value); s != "" {
+				return s
+			}
 		}
 	}
-
 	return ""
+}
+
+// identityFields names the caller even when the token has no email
+// (service accounts, the "account" client, users without an email).
+func identityFields(claims map[string]interface{}) string {
+	return fmt.Sprintf("user=%s sub=%s client=%s contact_id=%s store_id=%s is_agent=%s sid=%s",
+		logValue(claimString(claims, "username", "preferred_username")),
+		logValue(claimString(claims, "sub")),
+		logValue(claimString(claims, "client_id", "azp")),
+		logValue(claimString(claims, "contact_id")),
+		logValue(claimString(claims, "store_id", "store_ids")),
+		logValue(claimString(claims, "is_agent")),
+		logValue(claimString(claims, "sid", "session_state")),
+	)
+}
+
+// requestFields describes where the request came from. peer is the direct TCP peer
+// (a Cloudflare edge, or the real client when Cloudflare is bypassed); cf_ip is the
+// CF-Connecting-IP header, which a client that bypasses Cloudflare can forge.
+func requestFields(req *http.Request) string {
+	peer, _, err := net.SplitHostPort(req.RemoteAddr)
+	if err != nil {
+		peer = req.RemoteAddr
+	}
+	return fmt.Sprintf("peer=%s cf_ip=%s method=%s host=%s path=%s ua=%s",
+		logValue(peer),
+		logValue(req.Header.Get("CF-Connecting-IP")),
+		logValue(req.Method),
+		logValue(req.Host),
+		logValue(req.URL.Path),
+		logValue(req.UserAgent()),
+	)
+}
+
+// logValue keeps logfmt parseable: "-" for empty, quoted when the value has spaces,
+// quotes, '=' or control characters (header values are client-controlled).
+func logValue(s string) string {
+	if s == "" {
+		return "-"
+	}
+	if strings.ContainsAny(s, " \"=\t\r\n") || strconv.Quote(s) != `"`+s+`"` {
+		return strconv.Quote(s)
+	}
+	return s
 }
 
 // tokenRealm extracts a Keycloak realm name from the token's 'iss' claim.
 // It returns the realm name if the issuer contains the pattern '/realms/{realm}',
 // otherwise it returns an empty string.
 func tokenRealm(token string) string {
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		payload, err = base64.URLEncoding.DecodeString(parts[1])
-		if err != nil {
-			return ""
-		}
-	}
-
-	var claims map[string]interface{}
-	if err := json.Unmarshal(payload, &claims); err != nil {
+	claims := tokenClaims(token)
+	if claims == nil {
 		return ""
 	}
 
