@@ -82,8 +82,10 @@ func TestDeniesTokensWithoutSessionUnlessServiceClient(t *testing.T) {
 
 	status := func(serviceClients ...string) int {
 		cfg := CreateConfig()
-		cfg.ServiceClients = serviceClients
-		cfg.Realms = []RealmConfig{{RealmName: "back-office", ClientID: "gateway", ClientSecret: "s", ValidateAPIUrl: keycloak.URL}}
+		cfg.Realms = []RealmConfig{
+			{RealmName: "back-office", ClientID: "gateway", ClientSecret: "s", ValidateAPIUrl: keycloak.URL, ServiceClients: serviceClients},
+			{RealmName: "other", ClientID: "gateway", ClientSecret: "s", ValidateAPIUrl: keycloak.URL, ServiceClients: []string{"svc"}},
+		}
 		handler, err := New(context.Background(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}), cfg, "t")
 		if err != nil {
 			t.Fatal(err)
