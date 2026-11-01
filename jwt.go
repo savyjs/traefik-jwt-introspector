@@ -24,6 +24,8 @@ type Config struct {
 	Realms          []RealmConfig `json:"realms,omitempty"`
 	DefaultRealm    string        `json:"defaultRealm,omitempty"`
 	LogLevel        string        `json:"logLevel,omitempty"`
+	// ServiceClients may call with tokens that have no user session (client_credentials).
+	ServiceClients []string `json:"serviceClients,omitempty"`
 }
 
 func CreateConfig() *Config {
@@ -47,6 +49,7 @@ type JWT struct {
 	realms          map[string]RealmConfig
 	defaultRealm    string
 	logLevel        string
+	serviceClients  map[string]bool
 	infoLogger      *log.Logger
 	errorLogger     *log.Logger
 }
@@ -109,6 +112,11 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		}
 	}
 
+	serviceClients := map[string]bool{}
+	for _, c := range config.ServiceClients {
+		serviceClients[c] = true
+	}
+
 	infoLogger := log.New(os.Stdout, "", log.LstdFlags)
 	errorLogger := log.New(os.Stderr, "", log.LstdFlags)
 
@@ -122,6 +130,7 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		realms:          realms,
 		defaultRealm:    defaultRealm,
 		logLevel:        logLevel,
+		serviceClients:  serviceClients,
 		infoLogger:      infoLogger,
 		errorLogger:     errorLogger,
 	}, nil
@@ -254,14 +263,26 @@ func (j *JWT) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 
 	// Who sent the request: verified introspection claims for active tokens,
 	// unverified token claims for inactive ones (Keycloak returns only active=false).
+	var claims map[string]interface{}
+	if response.Active {
+		claims = decodeClaims(body)
+	}
 	who := ""
 	if j.shouldLog("info") {
 		if response.Active {
-			who = "claims=introspection " + identityFields(decodeClaims(body))
+			who = "claims=introspection " + identityFields(claims)
 		} else {
 			who = "claims=token " + identityFields(tokenClaims(headerToken))
 		}
 		who += " " + requestFields(req)
+	}
+
+	// Only user logins carry a session (sid); client_credentials tokens don't,
+	// so a leaked client secret alone can't call the API unless the client is listed.
+	if response.Active && claimString(claims, "sid", "session_state") == "" && !j.serviceClients[claimString(claims, "client_id", "azp")] {
+		j.logInfo("token_no_session_denied", "realm=%s %s", realmName, who)
+		http.Error(res, "access denied", http.StatusForbidden)
+		return
 	}
 
 	// Check if the response has { "active": true }
