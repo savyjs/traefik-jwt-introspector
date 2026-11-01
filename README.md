@@ -40,12 +40,12 @@ http:
           logLevel: debug
           baseAuthUrl: https://auth.my-domain.com
           defaultRealm: realm-1
-          serviceClients:
-            - my-backend
           realms:
             - realmName: realm-1
               clientId: gateway
               clientSecret: your-secret
+              serviceClients:
+                - my-backend
             - realmName: realm-2
               clientId: gateway
               clientSecret: your-secret
@@ -54,7 +54,7 @@ http:
 The realm is selected using the token `iss` claim (pattern `/realms/{realm}`) when it matches a configured realm. If no match is found, `defaultRealm` is used; when `defaultRealm` is not set, the first `realms` entry is used.
 `logLevel` can be one of `none`, `all`, `error`, `info`, `debug` (default: `none`). Logs do not include tokens or secrets; when available, the token `email` claim is logged at info level.
 
-Active tokens without a user session (no `sid` claim, i.e. `client_credentials` service-account tokens) are rejected with `403 access denied` in every realm, unless the token's client id is listed in `serviceClients`. User logins always carry a `sid`.
+Active tokens without a user session (no `sid` claim, i.e. `client_credentials` service-account tokens) are rejected with `403 access denied` in every realm, unless the token's client id is listed in that realm's `serviceClients`. User logins always carry a `sid`.
 
 Use as docker-compose label  
 ```yaml
