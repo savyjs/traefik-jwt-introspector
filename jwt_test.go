@@ -73,3 +73,32 @@ func TestLogsCallerWhenTokenHasNoEmail(t *testing.T) {
 		t.Errorf("inactive log missing %q\n%s", want, out.String())
 	}
 }
+
+func TestDeniesTokensWithoutSessionUnlessServiceClient(t *testing.T) {
+	keycloak := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"active":true,"username":"service-account-svc","client_id":"svc","azp":"svc"}`))
+	}))
+	defer keycloak.Close()
+
+	status := func(serviceClients ...string) int {
+		cfg := CreateConfig()
+		cfg.ServiceClients = serviceClients
+		cfg.Realms = []RealmConfig{{RealmName: "back-office", ClientID: "gateway", ClientSecret: "s", ValidateAPIUrl: keycloak.URL}}
+		handler, err := New(context.Background(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}), cfg, "t")
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest("GET", "https://api.example.com/v2/orders", nil)
+		req.Header.Set("Authorization", "Bearer "+fakeToken(`{"iss":"https://auth/realms/back-office"}`))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if got := status(); got != http.StatusForbidden {
+		t.Errorf("unlisted client without sid: got %d, want 403", got)
+	}
+	if got := status("other", "svc"); got != http.StatusOK {
+		t.Errorf("listed client without sid: got %d, want 200", got)
+	}
+}
